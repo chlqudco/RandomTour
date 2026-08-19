@@ -1,57 +1,53 @@
 package com.chlqudco.randomtour.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
-
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
+import androidx.compose.ui.graphics.Color
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    primary = ExplorerOrange,
     onPrimary = Color.White,
+    primaryContainer = Color(0xFFFFDCCB),
+    onPrimaryContainer = Color(0xFF3B1000),
+    secondary = ExplorerNavy,
     onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    secondaryContainer = Color(0xFFDCE4FF),
+    onSecondaryContainer = ExplorerNavy,
+    tertiary = ExplorerGreen,
+    background = ExplorerCream,
+    onBackground = ExplorerInk,
+    surface = Color.White,
+    onSurface = ExplorerInk,
+    surfaceVariant = Color(0xFFF4EEE7),
+    onSurfaceVariant = Color(0xFF565C68),
+    error = ExplorerRed
+)
+
+private val DarkColorScheme = darkColorScheme(
+    primary = Color(0xFFFFB596),
+    onPrimary = Color(0xFF5B1B00),
+    primaryContainer = ExplorerOrangeDark,
+    secondary = Color(0xFFB8C6EF),
+    onSecondary = ExplorerNavy,
+    tertiary = Color(0xFF80D5B6),
+    background = Color(0xFF101522),
+    onBackground = Color(0xFFF0F2F8),
+    surface = ExplorerDarkSurface,
+    onSurface = Color(0xFFF0F2F8),
+    surfaceVariant = Color(0xFF303A51),
+    onSurfaceVariant = Color(0xFFD2D7E3)
 )
 
 @Composable
 fun RandomTourTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
         typography = Typography,
         content = content
     )
