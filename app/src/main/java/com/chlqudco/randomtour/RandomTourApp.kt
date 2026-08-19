@@ -182,7 +182,8 @@ fun RandomTourApp(viewModel: RandomTourViewModel) {
             onBack = viewModel::backToSetup,
             onRetry = viewModel::retryDraw,
             onWiderRadius = viewModel::retryWithWiderRadius,
-            onBegin = viewModel::beginExploration
+            onBegin = viewModel::beginExploration,
+            onMapSymbolsCollected = viewModel::submitMapCandidates
         )
 
         AppScreen.EXPLORATION -> ExplorationScreen(
@@ -512,22 +513,38 @@ private fun DrawScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onWiderRadius: () -> Unit,
-    onBegin: () -> Unit
+    onBegin: () -> Unit,
+    onMapSymbolsCollected: (Int, List<MapSymbolCandidate>) -> Unit
 ) {
-    Scaffold(
-        containerColor = ExplorerNavy,
-        topBar = { ScreenTopBar("목적지 추첨", onBack, dark = true) }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            when {
+    Box(Modifier.fillMaxSize().background(ExplorerNavy)) {
+        if (state.drawStage == DrawStage.MAP_SEARCHING && state.startLocation != null) {
+            NaverExplorationMap(
+                startLocation = state.startLocation.point,
+                currentLocation = state.currentLocation,
+                radiusM = state.selectedRadiusM,
+                destination = null,
+                revealDestination = false,
+                recenterRequest = 0,
+                symbolCollectionRequest = state.mapSearchRequest,
+                onSymbolsCollected = onMapSymbolsCollected,
+                mapBottomPadding = 0.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = { ScreenTopBar("목적지 추첨", onBack, dark = true) }
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                when {
                 state.drawError != null -> {
                     Surface(
                         shape = RoundedCornerShape(30.dp),
@@ -616,13 +633,11 @@ private fun DrawScreen(
                                     )
                                 }
                             }
-                            if (state.usingDeviceSearch) {
+                            state.destination?.source?.let { source ->
                                 Spacer(Modifier.height(14.dp))
-                                Text(
-                                    "장소 서버가 없어 기기의 지역 검색 결과를 사용했어요",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = ExplorerMuted,
-                                    textAlign = TextAlign.Center
+                                CandidateSourceNotice(
+                                    source = source,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             Spacer(Modifier.height(24.dp))
@@ -642,18 +657,35 @@ private fun DrawScreen(
                     }
                 }
 
-                else -> {
-                    DrawLoadingIndicator(stage = state.drawStage)
-                    Spacer(Modifier.height(36.dp))
-                    Text(state.drawStage.message, style = MaterialTheme.typography.headlineMedium, color = Color.White, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "장소명과 정확한 위치는 숨긴 채\n거리와 방향만 알려드릴게요",
-                        color = Color.White.copy(alpha = 0.65f),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(36.dp))
-                    DrawStageList(current = state.drawStage)
+                    else -> {
+                        Surface(
+                            shape = RoundedCornerShape(28.dp),
+                            color = if (state.drawStage == DrawStage.MAP_SEARCHING) {
+                                ExplorerNavy.copy(alpha = 0.94f)
+                            } else {
+                                Color.Transparent
+                            }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(
+                                    if (state.drawStage == DrawStage.MAP_SEARCHING) 24.dp else 0.dp
+                                ),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                DrawLoadingIndicator(stage = state.drawStage)
+                                Spacer(Modifier.height(36.dp))
+                                Text(state.drawStage.message, style = MaterialTheme.typography.headlineMedium, color = Color.White, textAlign = TextAlign.Center)
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    "장소명과 정확한 위치는 숨긴 채\n거리와 방향만 알려드릴게요",
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(Modifier.height(36.dp))
+                                DrawStageList(current = state.drawStage)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -839,6 +871,10 @@ private fun ExplorationScreen(
                         }
                     }
                 }
+                state.destination?.source?.let { source ->
+                    Spacer(Modifier.height(12.dp))
+                    CandidateSourceNotice(source = source)
+                }
             }
         }
     }
@@ -932,6 +968,8 @@ private fun ArrivalScreen(
                         Text(destination.roadAddress, color = ExplorerMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                CandidateSourceNotice(source = destination.source)
                 Spacer(Modifier.height(22.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CompactStat("탐험 시간", ExplorationMath.formatDuration(elapsedSeconds), Modifier.weight(1f))
@@ -975,6 +1013,54 @@ private fun ArrivalScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CandidateSourceNotice(
+    source: CandidateSource,
+    modifier: Modifier = Modifier
+) {
+    if (source == CandidateSource.UNKNOWN) return
+    val context = LocalContext.current
+    val isOpenStreetMap = source == CandidateSource.OPENSTREETMAP
+    Row(
+        modifier = modifier.then(
+            if (isOpenStreetMap) {
+                Modifier.clickable {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://www.openstreetmap.org/copyright")
+                            )
+                        )
+                    }
+                }
+            } else {
+                Modifier
+            }
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Rounded.Info,
+            contentDescription = null,
+            tint = ExplorerMuted,
+            modifier = Modifier.size(15.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (isOpenStreetMap) {
+                "장소 데이터 © OpenStreetMap contributors · ODbL"
+            } else {
+                "후보 데이터 · NAVER 지도"
+            },
+            color = ExplorerMuted,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1115,7 +1201,7 @@ private fun SettingsScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "위치는 탐험 화면이 보이는 동안에만 사용합니다. 백그라운드 위치 권한은 요청하지 않으며, 저장된 탐험 기록은 기록 화면에서 모두 삭제할 수 있어요.",
+                        "위치는 탐험 화면이 보이는 동안에만 사용합니다. 후보 검색 시 현재 좌표와 반경을 공개 OpenStreetMap Overpass 서비스에 전송하며, 백그라운드 위치 권한은 요청하지 않습니다. 저장된 탐험 기록은 기록 화면에서 모두 삭제할 수 있어요.",
                         color = Color.White.copy(alpha = 0.72f),
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -1129,11 +1215,7 @@ private fun SettingsScreen(
                     Icon(Icons.Rounded.Info, contentDescription = null, tint = ExplorerBlue, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        if (BuildConfig.CANDIDATE_API_BASE_URL.isBlank()) {
-                            "NAVER 지도는 연결되어 있습니다. 장소 서버 주소가 없어 개발용 기기 검색을 사용합니다."
-                        } else {
-                            "NAVER 지도와 별도 장소 후보 서버가 연결되어 있습니다."
-                        },
+                        "별도 후보 서버 없이 OpenStreetMap 공개 장소를 먼저 조회하고, 부족하면 NAVER 지도에 표시된 장소를 활용합니다.",
                         color = ExplorerMuted,
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -1372,7 +1454,13 @@ private fun DrawLoadingIndicator(stage: DrawStage) {
 
 @Composable
 private fun DrawStageList(current: DrawStage) {
-    val stages = listOf(DrawStage.LOCATING, DrawStage.RESOLVING_AREA, DrawStage.SEARCHING, DrawStage.FILTERING)
+    val stages = listOf(
+        DrawStage.LOCATING,
+        DrawStage.RESOLVING_AREA,
+        DrawStage.SEARCHING,
+        DrawStage.MAP_SEARCHING,
+        DrawStage.FILTERING
+    )
     val currentIndex = stages.indexOf(current).coerceAtLeast(0)
     Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = 0.08f)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

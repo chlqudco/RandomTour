@@ -7,12 +7,14 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.graphics.PointF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
@@ -31,8 +33,13 @@ import com.naver.maps.map.CameraAnimation
 import com.naver.maps.map.CameraUpdate
 import com.naver.maps.map.MapView
 import com.naver.maps.map.NaverMap
+import com.naver.maps.map.Symbol
 import com.naver.maps.map.overlay.CircleOverlay
 import com.naver.maps.map.overlay.Marker
+import kotlinx.coroutines.delay
+import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.hypot
 
 @Composable
 fun NaverExplorationMap(
@@ -42,6 +49,8 @@ fun NaverExplorationMap(
     destination: Destination?,
     revealDestination: Boolean,
     recenterRequest: Int,
+    symbolCollectionRequest: Int = 0,
+    onSymbolsCollected: ((Int, List<MapSymbolCandidate>) -> Unit)? = null,
     modifier: Modifier = Modifier,
     mapBottomPadding: Dp = 276.dp
 ) {
@@ -54,6 +63,7 @@ fun NaverExplorationMap(
     val radiusOverlay = remember { CircleOverlay() }
     val destinationMarker = remember { Marker() }
     val bottomPadding = with(LocalDensity.current) { mapBottomPadding.roundToPx() }
+    val latestSymbolsCallback by rememberUpdatedState(onSymbolsCollected)
     var initialCameraMoved by remember { mutableStateOf(false) }
 
     DisposableEffect(mapView, lifecycleOwner) {
@@ -210,6 +220,39 @@ fun NaverExplorationMap(
                 zoomForRadius(radiusM)
             ).animate(CameraAnimation.Easing, 500)
         )
+    }
+
+    LaunchedEffect(naverMap, symbolCollectionRequest) {
+        if (symbolCollectionRequest <= 0) return@LaunchedEffect
+        val map = naverMap ?: return@LaunchedEffect
+        delay(900)
+        var renderAttempts = 0
+        while (renderAttempts < 12 && (!map.isLoaded || !map.isRenderingStable)) {
+            delay(150)
+            renderAttempts += 1
+        }
+        val contentRect = map.contentRect
+        if (contentRect.width() <= 0 || contentRect.height() <= 0) {
+            latestSymbolsCallback?.invoke(symbolCollectionRequest, emptyList())
+            return@LaunchedEffect
+        }
+        val center = PointF(contentRect.exactCenterX(), contentRect.exactCenterY())
+        val radius = ceil(
+            hypot(contentRect.width() / 2.0, contentRect.height() / 2.0)
+        ).toInt() + 2
+        val symbols = map.pickAll(center, radius)
+            .filterIsInstance<Symbol>()
+            .map { symbol ->
+                MapSymbolCandidate(
+                    name = symbol.caption,
+                    point = GeoPoint(symbol.position.latitude, symbol.position.longitude)
+                )
+            }
+            .filter { it.name.isNotBlank() }
+            .distinctBy {
+                "${it.name}|${"%.5f".format(Locale.US, it.point.latitude)}|${"%.5f".format(Locale.US, it.point.longitude)}"
+            }
+        latestSymbolsCallback?.invoke(symbolCollectionRequest, symbols)
     }
 }
 

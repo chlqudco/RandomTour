@@ -13,38 +13,32 @@ enum class AppScreen {
 enum class ExplorationMode(
     val label: String,
     val description: String,
-    val symbol: String,
-    val queries: List<String>
+    val symbol: String
 ) {
     RANDOM(
         "완전 랜덤",
         "무엇이 나올지 모르는 탐험",
-        "?",
-        listOf("카페", "맛집", "베이커리", "공원", "서점", "전시", "소품샵", "시장")
+        "?"
     ),
     CAFE(
         "카페",
         "커피와 디저트를 찾아서",
-        "C",
-        listOf("카페", "커피", "디저트", "베이커리")
+        "C"
     ),
     FOOD(
         "먹거리",
         "근처의 한 끼를 우연히",
-        "F",
-        listOf("맛집", "분식", "한식", "일식", "중식", "베이커리")
+        "F"
     ),
     WALK(
         "산책",
         "공원과 걷기 좋은 장소",
-        "W",
-        listOf("공원", "산책로", "광장", "정원", "전망대")
+        "W"
     ),
     CULTURE(
         "문화",
         "책과 전시, 작은 발견",
-        "A",
-        listOf("서점", "전시", "갤러리", "박물관", "공방")
+        "A"
     )
 }
 
@@ -65,9 +59,16 @@ enum class TemperatureHint(val label: String, val message: String) {
 enum class DrawStage(val message: String) {
     LOCATING("현재 위치를 확인하고 있어요"),
     RESOLVING_AREA("동네 이름을 찾고 있어요"),
-    SEARCHING("주변 장소를 모으고 있어요"),
+    SEARCHING("공개 장소 데이터를 확인하고 있어요"),
     FILTERING("반경 안 후보를 고르고 있어요"),
+    MAP_SEARCHING("NAVER 지도에서 장소를 더 찾고 있어요"),
     READY("목적지를 뽑았어요")
+}
+
+enum class CandidateSource {
+    OPENSTREETMAP,
+    NAVER_MAP,
+    UNKNOWN
 }
 
 data class GeoPoint(
@@ -88,13 +89,18 @@ data class Destination(
     val category: String,
     val point: GeoPoint,
     val roadAddress: String,
-    val distanceFromStartM: Double
+    val distanceFromStartM: Double,
+    val source: CandidateSource = CandidateSource.UNKNOWN
 )
 
 data class CandidateSearchResult(
     val areaLabel: String,
-    val candidates: List<Destination>,
-    val usedBackend: Boolean
+    val candidates: List<Destination>
+)
+
+data class MapSymbolCandidate(
+    val name: String,
+    val point: GeoPoint
 )
 
 data class ExplorationRecord(
@@ -124,7 +130,7 @@ data class AppUiState(
     val drawError: String? = null,
     val areaLabel: String = "",
     val candidateCount: Int = 0,
-    val usingDeviceSearch: Boolean = false,
+    val mapSearchRequest: Int = 0,
     val startLocation: LocationSnapshot? = null,
     val currentLocation: LocationSnapshot? = null,
     val destination: Destination? = null,

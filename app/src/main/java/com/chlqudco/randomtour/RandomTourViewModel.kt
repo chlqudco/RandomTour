@@ -3,7 +3,9 @@ package com.chlqudco.randomtour
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,8 +18,7 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
     private val locationRepository = LocationRepository(application)
     private val candidateRepository = CandidateRepository(
         context = application,
-        store = store,
-        backendBaseUrl = BuildConfig.CANDIDATE_API_BASE_URL
+        store = store
     )
     private val arrivalDetector = ArrivalDetector()
     private val initialSettings = store.loadSettings()
@@ -33,6 +34,9 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
     private var drawJob: Job? = null
+    private var mapSearchTimeoutJob: Job? = null
+    private var pendingMapSearch: PendingMapSearch? = null
+    private var drawRequestId = 0
     private var hostStarted = false
 
     fun openSetup() {
@@ -105,6 +109,10 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
 
     fun drawDestination() {
         drawJob?.cancel()
+        mapSearchTimeoutJob?.cancel()
+        pendingMapSearch = null
+        drawRequestId += 1
+        val requestId = drawRequestId
         locationRepository.stopUpdates()
         _uiState.update {
             it.copy(
@@ -113,7 +121,7 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
                 drawError = null,
                 areaLabel = "",
                 candidateCount = 0,
-                usingDeviceSearch = false,
+                mapSearchRequest = 0,
                 startLocation = null,
                 currentLocation = null,
                 destination = null,
@@ -141,36 +149,138 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
             }
             _uiState.update { it.copy(startLocation = location, currentLocation = location) }
             val state = _uiState.value
-            runCatching {
-                candidateRepository.search(
+            try {
+                val result = candidateRepository.searchOpenData(
                     origin = location.point,
                     radiusM = state.selectedRadiusM,
                     mode = state.selectedMode
-                ) { stage -> _uiState.update { current -> current.copy(drawStage = stage) } }
-            }.onSuccess { result ->
-                val destination = result.candidates.random()
-                _uiState.update {
-                    it.copy(
-                        drawStage = DrawStage.READY,
-                        areaLabel = result.areaLabel,
-                        candidateCount = result.candidates.size,
-                        usingDeviceSearch = !result.usedBackend,
-                        destination = destination,
-                        remainingDistanceM = destination.distanceFromStartM,
-                        targetBearingDegrees = ExplorationMath.bearingDegrees(
-                            location.point,
-                            destination.point
-                        ),
-                        temperature = ExplorationMath.temperature(destination.distanceFromStartM)
-                    )
+                ) { stage ->
+                    if (requestId == drawRequestId) {
+                        _uiState.update { current -> current.copy(drawStage = stage) }
+                    }
                 }
-            }.onFailure { error ->
+                if (requestId != drawRequestId) return@launch
+                if (canDrawWithoutMap(result, state.selectedMode)) {
+                    finishDraw(requestId, result, location)
+                } else {
+                    pendingMapSearch = PendingMapSearch(
+                        requestId = requestId,
+                        location = location,
+                        radiusM = state.selectedRadiusM,
+                        mode = state.selectedMode,
+                        openDataResult = result
+                    )
+                    _uiState.update {
+                        it.copy(
+                            drawStage = DrawStage.MAP_SEARCHING,
+                            areaLabel = result.areaLabel,
+                            candidateCount = result.candidates.size,
+                            mapSearchRequest = requestId
+                        )
+                    }
+                    startMapSearchTimeout(requestId)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (requestId != drawRequestId) return@launch
                 _uiState.update {
                     it.copy(
                         drawError = error.message ?: "목적지를 뽑는 중 문제가 생겼어요"
                     )
                 }
             }
+        }
+    }
+
+    fun submitMapCandidates(requestId: Int, symbols: List<MapSymbolCandidate>) {
+        val pending = pendingMapSearch?.takeIf { it.requestId == requestId } ?: return
+        pendingMapSearch = null
+        mapSearchTimeoutJob?.cancel()
+        drawJob = viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(drawStage = DrawStage.FILTERING) }
+                val result = candidateRepository.mergeMapSymbols(
+                    origin = pending.location.point,
+                    radiusM = pending.radiusM,
+                    mode = pending.mode,
+                    areaLabel = pending.openDataResult.areaLabel,
+                    openDataCandidates = pending.openDataResult.candidates,
+                    symbols = symbols
+                )
+                finishDraw(requestId, result, pending.location)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (requestId == drawRequestId) {
+                    _uiState.update {
+                        it.copy(drawError = error.message ?: "지도 장소를 확인하는 중 문제가 생겼어요")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun canDrawWithoutMap(
+        result: CandidateSearchResult,
+        mode: ExplorationMode
+    ): Boolean = when (mode) {
+        ExplorationMode.RANDOM -> result.candidates.size >= MINIMUM_RANDOM_CANDIDATES
+        else -> result.candidates.isNotEmpty()
+    }
+
+    private fun startMapSearchTimeout(requestId: Int) {
+        mapSearchTimeoutJob = viewModelScope.launch {
+            delay(MAP_SEARCH_TIMEOUT_MILLIS)
+            val pending = pendingMapSearch?.takeIf { it.requestId == requestId } ?: return@launch
+            pendingMapSearch = null
+            if (pending.openDataResult.candidates.isNotEmpty()) {
+                finishDraw(requestId, pending.openDataResult, pending.location)
+            } else if (requestId == drawRequestId) {
+                _uiState.update {
+                    it.copy(
+                        drawStage = DrawStage.FILTERING,
+                        mapSearchRequest = 0,
+                        drawError = "공개 장소 데이터와 NAVER 지도에서 반경 안의 후보를 찾지 못했어요"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun finishDraw(
+        requestId: Int,
+        result: CandidateSearchResult,
+        location: LocationSnapshot
+    ) {
+        if (requestId != drawRequestId) return
+        val selected = result.candidates.randomOrNull()
+        if (selected == null) {
+            _uiState.update {
+                it.copy(
+                    drawStage = DrawStage.FILTERING,
+                    mapSearchRequest = 0,
+                    drawError = "공개 장소 데이터와 NAVER 지도에서 반경 안의 후보를 찾지 못했어요"
+                )
+            }
+            return
+        }
+        val destination = candidateRepository.enrichAddress(selected)
+        if (requestId != drawRequestId) return
+        _uiState.update {
+            it.copy(
+                drawStage = DrawStage.READY,
+                areaLabel = result.areaLabel,
+                candidateCount = result.candidates.size,
+                mapSearchRequest = 0,
+                destination = destination,
+                remainingDistanceM = destination.distanceFromStartM,
+                targetBearingDegrees = ExplorationMath.bearingDegrees(
+                    location.point,
+                    destination.point
+                ),
+                temperature = ExplorationMath.temperature(destination.distanceFromStartM)
+            )
         }
     }
 
@@ -237,7 +347,10 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun goHome() {
+        drawRequestId += 1
         drawJob?.cancel()
+        mapSearchTimeoutJob?.cancel()
+        pendingMapSearch = null
         locationRepository.stopUpdates()
         arrivalDetector.reset()
         _uiState.update {
@@ -257,7 +370,10 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun backToSetup() {
+        drawRequestId += 1
         drawJob?.cancel()
+        mapSearchTimeoutJob?.cancel()
+        pendingMapSearch = null
         _uiState.update { it.copy(screen = AppScreen.SETUP, drawError = null) }
     }
 
@@ -355,6 +471,20 @@ class RandomTourViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     override fun onCleared() {
+        mapSearchTimeoutJob?.cancel()
         locationRepository.stopUpdates()
+    }
+
+    private data class PendingMapSearch(
+        val requestId: Int,
+        val location: LocationSnapshot,
+        val radiusM: Int,
+        val mode: ExplorationMode,
+        val openDataResult: CandidateSearchResult
+    )
+
+    private companion object {
+        const val MINIMUM_RANDOM_CANDIDATES = 5
+        const val MAP_SEARCH_TIMEOUT_MILLIS = 12_000L
     }
 }

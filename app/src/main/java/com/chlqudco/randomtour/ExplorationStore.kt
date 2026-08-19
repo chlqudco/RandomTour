@@ -71,6 +71,7 @@ class ExplorationStore(context: Context) {
         .put("longitude", point.longitude)
         .put("roadAddress", roadAddress)
         .put("distanceFromStartM", distanceFromStartM)
+        .put("source", source.name)
 
     private fun JSONObject.toRecord(): ExplorationRecord = ExplorationRecord(
         id = getString("id"),
@@ -88,7 +89,8 @@ class ExplorationStore(context: Context) {
         category = optString("category", "장소"),
         point = GeoPoint(getDouble("latitude"), getDouble("longitude")),
         roadAddress = optString("roadAddress"),
-        distanceFromStartM = optDouble("distanceFromStartM")
+        distanceFromStartM = optDouble("distanceFromStartM"),
+        source = enumValueOrDefault(optString("source"), CandidateSource.UNKNOWN)
     )
 
     private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String?, fallback: T): T =

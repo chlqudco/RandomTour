@@ -12,9 +12,6 @@ val localProperties = Properties().apply {
     }
 }
 
-fun String.asBuildConfigValue(): String =
-    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
-
 android {
     namespace = "com.chlqudco.randomtour"
     compileSdk = 37
@@ -29,11 +26,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["NAVER_MAP_API_KEY"] =
             localProperties.getProperty("NAVER_MAP_API_KEY", "")
-        buildConfigField(
-            "String",
-            "CANDIDATE_API_BASE_URL",
-            localProperties.getProperty("RANDOM_TOUR_API_BASE_URL", "").asBuildConfigValue()
-        )
     }
 
     buildTypes {
@@ -51,7 +43,6 @@ android {
     }
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 }
 
